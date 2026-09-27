@@ -72,7 +72,7 @@ const EST = {"deliveryMap":{"극소 1호":1980,"2호":1980,"두껍 2호":1980,"3
 <script>
 (() => {
 const CJ_ORIGIN = 'https://loisparcelp.cjlogistics.com', CJ_URL = CJ_ORIGIN + '/index.do';
-const GRAPH = 'https://graph.microsoft.com/v1.0', AUTH = 'https://login.microsoftonline.com/common/oauth2/v2.0';
+const GRAPH = 'https://graph.microsoft.com/v1.0', AUTH = 'https://login.microsoftonline.com/common/oauth2/v2.0'.replace('/common/', '/consumers/');
 const SCOPES = 'Files.ReadWrite.All offline_access';
 const REDIRECT = location.origin + location.pathname;
 
@@ -542,6 +542,10 @@ document.addEventListener('focusout', e => {
 
 // ---------- boot ----------
 const q = new URLSearchParams(location.search);
+if (q.has('error')) {
+  document.body.innerHTML = `<div style="padding:20px;font:13px/1.6 'Noto Sans KR',sans-serif;color:#0F1624"><b style="color:#C62828">Microsoft 로그인 오류</b><p style="margin-top:8px">${esc(q.get('error'))}</p><p style="margin-top:8px;word-break:break-all">${esc(q.get('error_description') || '')}</p></div>`;
+  return;
+}
 if (q.has('code') && window.opener && window.opener !== window) {
   try { window.opener.postMessage({ type: 'ms-code', code: q.get('code'), state: q.get('state') }, location.origin); } catch {}
   document.body.textContent = '로그인 완료. 이 창은 닫아도 됩니다.'; setTimeout(() => window.close(), 400);
