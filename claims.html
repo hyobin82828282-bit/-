@@ -216,7 +216,13 @@ const col = n => Engine.colName(n);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const refNoteKey = (f, sheet, row) => f ? [f.driveId, f.itemId, sheet, row].join(':') : String(row);
 const claimValue = (wb, sh, a) => { const c = sh.cells[a]; return c?.f && c.v !== undefined ? c.v : wb.value(sh, a); };
-const claimSheet = wb => wb.sheets.find(s => /\d+월 클레임/.test(s.name)) || wb.sheets.find(s => s.name.includes('클레임')) || wb.sheets[0];
+// 클레임 관리에서 보고 있는 달(없으면 이번 달) 시트를 우선 연결
+const claimSheet = wb => {
+  const cur = (location.hash.match(/month=(\d{6})/) || [])[1] || localStorage.getItem('claims_cur_month') || '', m = /^\d{6}$/.test(cur) ? parseInt(cur.slice(4)) : new Date().getMonth() + 1;
+  const clean = s => s.replace(/\s/g, '');
+  return wb.sheets.find(s => clean(s.name) === m + '월클레임') || wb.sheets.find(s => new RegExp('(^|\\D)' + m + '\\s*월').test(s.name) && s.name.includes('클레임') && !s.name.includes('통합'))
+    || wb.sheets.find(s => /\d+월 클레임/.test(s.name)) || wb.sheets.find(s => s.name.includes('클레임')) || wb.sheets[0];
+};
 function headerCol(wb, sh, words, fallback) {
   for (let c = 1; c <= Math.max(sh.maxC, 30); c++) {
     const h = norm(wb.display(sh, col(c) + '1')).replace(/\s/g, '');
@@ -433,6 +439,15 @@ function syncBase() {
   if (m) try { localStorage.setItem('mw_sync_url', decodeURIComponent(m[1])); } catch {}
   return (localStorage.getItem('mw_sync_url') || '').trim().replace(/\/+$/, '');
 }
+// 클레임 관리 화면에서 사유로 자동 표시되는 누락/사고 칸·택배사고접수도 엑셀에 같이 적음
+function derived(a) {
+  const d = { ...a }, nul = a.reason === '누락', acc = ['파손반송','파손수령','배송지연','송장흐름없음','분실','오배송'].includes(a.reason);
+  const fill = (f, v) => { if (isBlank(d[f]) && !isBlank(v)) d[f] = v; };
+  if (nul) { fill('missingCode', a.productCode); fill('missing', a.product); fill('misQty', a.qty); }
+  if (acc) { fill('accidentCode', a.productCode); fill('accident', a.product); fill('accQty', a.qty); }
+  if (a.type === '택배사고') fill('courierOk', '필요');
+  return d;
+}
 let syncTimer = 0, syncing = false;
 function startAutoSync() { clearInterval(syncTimer); runSync(); syncTimer = setInterval(runSync, SYNC_MIN * 60000); }
 async function runSync() {
@@ -473,9 +488,11 @@ async function runSync() {
       const row = vals[r], obj = {}; F_MAP.forEach(([c, f, t]) => obj[f] = fromCell(row[c], t));
       let hit = (pool.get(k(obj)) || []).shift();
       if (!hit) {
-        // 품목명 표기가 달라도 같은 송장의 남은 행이 있으면 같은 건으로 보고 채움
-        const w = wbKey(obj.waybill);
-        for (const [kk, list] of pool) if (kk.split('|')[0] === w && list.length) { hit = list.shift(); break; }
+        // 품목명 표기가 달라도 같은 송장·같은 품목코드면 같은 건, 송장에 남은 행이 1개뿐일 때만 같은 건으로 봄
+        const w = wbKey(obj.waybill), code = String(obj.productCode || '').trim();
+        const rest = []; for (const [kk, list] of pool) if (kk.split('|')[0] === w) list.forEach(a => rest.push([list, a]));
+        const pick = (code && rest.find(([, a]) => String(a.productCode || '').trim() === code)) || (rest.length === 1 ? rest[0] : null);
+        if (pick) { hit = pick[1]; pick[0].splice(pick[0].indexOf(hit), 1); }
       }
       if (!hit) {
         const n = { id: idBase++, ...obj, productList: obj.product, excluded: false };
@@ -486,7 +503,7 @@ async function runSync() {
       matched.add(hit);
       const out = fms[r].map((f, c) => isF(r, c) ? f : (row[c] ?? '')); let changed = false;
       F_MAP.forEach(([c, f]) => {
-        const xv = obj[f], av = hit[f];
+        const xv = obj[f], av = derived(hit)[f];
         // 재출고송장 칸의 '재출고' 같은 표시 글자는 엑셀의 실제 송장번호로 교체
         const placeholder = f === 'reship' && !isBlank(av) && !/\d{6,}/.test(String(av)) && /\d{6,}/.test(String(xv ?? ''));
         if ((isBlank(av) || placeholder) && !isBlank(xv)) { hit[f] = xv; fillApp++; }
@@ -503,7 +520,7 @@ async function runSync() {
       for (let c = 0; c < endCol; c++) {
         if (r < vals.length && isF(r, c)) out.push(fms[r][c]);
         else if (r >= vals.length && isF(last, c)) out.push(Engine.shiftFormula(fms[last][c], 0, r - last));
-        else { const m = F_MAP.find(x => x[0] === c); out.push(m && !isBlank(a[m[1]]) ? a[m[1]] : ''); }
+        else { const m = F_MAP.find(x => x[0] === c), d = derived(a); out.push(m && !isBlank(d[m[1]]) ? d[m[1]] : ''); }
       }
       rowWrites.push({ r, out }); addXl++; r++;
     }
