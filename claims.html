@@ -39,7 +39,7 @@ select:focus,input:focus{border-color:var(--accent);background:var(--surface)}
 .fare-draft.filled{border-color:var(--success);background:var(--success-bg)}
 @media(max-width:640px){.queue-row{grid-template-columns:1fr 1fr}.queue-row span{grid-column:1/-1}}
 .claims-table-wrap{overflow:auto;max-height:70vh}
-.xl-grid{width:max-content;border-collapse:collapse;font-size:11.5px;table-layout:fixed}
+.xl-grid{border-collapse:collapse;font-size:11.5px;table-layout:fixed}
 .xl-grid th,.xl-grid td{border:1px solid #D4D4D4;padding:3px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;height:22px}
 .xl-grid th.xl-ch{overflow:visible}
 .xl-rs{position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:col-resize;z-index:4}
@@ -262,12 +262,14 @@ const XL_COLS = Array.from({ length: 24 }, (_, i) => i + 1); // A~X
 const XL_W_KEY = 'claims-excel.colw', XL_W_DEF = 100;
 let XL_W = {}; try { XL_W = JSON.parse(localStorage.getItem(XL_W_KEY) || '{}') || {}; } catch {}
 const colW = c => XL_W[c] || XL_W_DEF;
+const xlTableW = (cc, nc) => 40 + XL_COLS.reduce((a, c) => a + colW(c), 0) + (cc ? 0 : 80) + (nc ? 0 : 160);
 document.addEventListener('mousedown', e => {
   const h = e.target.closest('[data-rs]'); if (!h) return;
   e.preventDefault();
   const c = +h.dataset.rs, colEl = document.querySelector(`col[data-colw="${c}"]`), x0 = e.clientX, w0 = colW(c);
   document.body.style.cursor = 'col-resize';
-  const move = ev => { XL_W[c] = Math.max(30, Math.round(w0 + ev.clientX - x0)); if (colEl) colEl.style.width = XL_W[c] + 'px'; };
+  const tbl = h.closest('table'), t0 = tbl.offsetWidth;
+  const move = ev => { XL_W[c] = Math.max(30, Math.round(w0 + ev.clientX - x0)); if (colEl) colEl.style.width = XL_W[c] + 'px'; tbl.style.width = (t0 + XL_W[c] - w0) + 'px'; };
   const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); document.body.style.cursor = ''; localStorage.setItem(XL_W_KEY, JSON.stringify(XL_W)); };
   document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
 });
@@ -312,7 +314,7 @@ function render() {
         <button class="btn" data-a="skip" data-row="${r.row}">조회 안 됨 · 건너뛰기</button></div>`).join('')}
       ${S.queue.length ? '' : '<p class="muted">조회 목록을 만들거나 통합내역을 가져오세요.</p>'}
     </div>
-    <div class="panel claims-table-wrap"><table class="xl-grid"><colgroup><col style="width:40px">${XL_COLS.map(c => `<col data-colw="${c}" style="width:${colW(c)}px">`).join('')}${coolantCol ? '' : '<col style="width:80px">'}${cols().noteCol ? '' : '<col style="width:160px">'}</colgroup><thead><tr><th class="xl-rh"></th>${XL_COLS.map(c => `<th class="xl-ch">${col(c)}<span class="xl-rs" data-rs="${c}" title="끌어서 너비 조절 · 더블클릭으로 기본값"></span></th>`).join('')}${coolantCol ? '' : '<th class="xl-ch">냉매</th>'}${cols().noteCol ? '' : '<th class="xl-ch">메모</th>'}</tr>
+    <div class="panel claims-table-wrap"><table class="xl-grid" style="width:${xlTableW(coolantCol, cols().noteCol)}px"><colgroup><col style="width:40px">${XL_COLS.map(c => `<col data-colw="${c}" style="width:${colW(c)}px">`).join('')}${coolantCol ? '' : '<col style="width:80px">'}${cols().noteCol ? '' : '<col style="width:160px">'}</colgroup><thead><tr><th class="xl-rh"></th>${XL_COLS.map(c => `<th class="xl-ch">${col(c)}<span class="xl-rs" data-rs="${c}" title="끌어서 너비 조절 · 더블클릭으로 기본값"></span></th>`).join('')}${coolantCol ? '' : '<th class="xl-ch">냉매</th>'}${cols().noteCol ? '' : '<th class="xl-ch">메모</th>'}</tr>
       <tr class="xl-hdr"><th class="xl-rh">1</th>${XL_COLS.map(c => `<th>${esc(S.wb.display(s, col(c) + 1))}</th>`).join('')}${coolantCol ? '' : '<th></th>'}${cols().noteCol ? '' : '<th></th>'}</tr></thead><tbody>
       ${tableRows().map(r => `<tr><td class="xl-rh">${r.row}</td>${XL_COLS.map(c => {
           const ref = col(c) + r.row, v = S.wb.display(s, ref), isNum = typeof S.wb.value(s, ref) === 'number', f = s.cells[ref]?.f;
