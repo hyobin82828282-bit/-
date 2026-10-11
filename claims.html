@@ -241,6 +241,7 @@ function render() {
     <input id="shareUrl" value="${esc(S.shareUrl)}" placeholder="클레임 엑셀 공유 링크 또는 Excel 웹 주소" aria-label="OneDrive 엑셀 공유 링크">
     <button class="btn" data-a="cloud" ${S.cloudBusy || !S.clientId || !S.shareUrl ? 'disabled' : ''}>${S.cloudBusy ? '연결 중…' : 'OneDrive 연결 및 파일 열기'}</button>
     ${S.cloudFile ? `<span class="muted">연결됨 · ${esc(S.cloudFile.fileName)}</span>` : ''}
+    ${S.syncMsg ? `<span class="muted">🔄 ${esc(S.syncMsg)}</span>` : ''}
     <small>Microsoft 앱 ID와 현재 웹주소의 HTTPS 로그인 등록이 필요합니다.</small>
   </div>`;
   if (S.wb && s) {
@@ -288,6 +289,7 @@ async function openCloudFile() {
   localStorage.setItem('claims.graph.clientId', S.clientId); localStorage.setItem('claims.graph.shareUrl', S.shareUrl);
   set({ wb: book, name: ref.fileName, sheetName: target.name, queue: [], cloudFile: ref, settingsOpen: true });
   flash(ref.fileName + ' OneDrive에서 열었습니다.');
+  startAutoSync();
 }
 async function connectCloud() {
   set({ cloudBusy: true });
@@ -342,6 +344,89 @@ function autoLookup() {
     flash('CJ 자동조회 보조도구가 연결되지 않았습니다. 설치 후 다시 실행해 주세요.');
   }, 20000);
 }
+// ---------- 클레임 관리 ↔ OneDrive 엑셀 자동 동기화 (빈 칸만 채움, 기존 값 유지) ----------
+const SYNC_MIN = 3, NCOL = 33;
+const F_MAP = [[0,'days','n'],[1,'mall'],[2,'recv','d'],[3,'ship','d'],[4,'waybill'],[5,'name'],[6,'type'],[7,'reason'],[8,'productCode'],[9,'product'],[10,'qty','n'],[11,'missingCode'],[12,'missing'],[13,'misQty','n'],[14,'accidentCode'],[15,'accident'],[16,'accQty','n'],[17,'reship'],[18,'courierOk'],[20,'stockAdjDate','d'],[21,'note'],[22,'price','n'],[23,'claimDelivery','n'],[24,'tempZone'],[25,'delivery','n'],[26,'material','n'],[27,'deliveryCalc','n'],[28,'workCalc','n'],[31,'workType'],[32,'boxCode']];
+const isBlank = v => v === undefined || v === null || String(v).trim() === '';
+const wbKey = v => String(v ?? '').replace(/[\s\-]/g, '').replace(/\.0+$/, '');
+function fromCell(v, t) {
+  if (isBlank(v)) return '';
+  if (t === 'n') { const n = parseFloat(String(v).replace(/,/g, '')); return isNaN(n) ? '' : n; }
+  if (t === 'd' && typeof v === 'number') { const i = XLSX.SSF.parse_date_code(v); if (i) return String(i.m).padStart(2, '0') + '/' + String(i.d).padStart(2, '0'); }
+  return String(v).trim();
+}
+function claimMonthKey() {
+  const m = parseInt((S.sheetName.match(/(\d+)\s*월/) || [])[1]);
+  if (!m) return null;
+  const cur = localStorage.getItem('claims_cur_month') || '', now = new Date();
+  const y = cur && parseInt(cur.slice(4)) === m ? cur.slice(0, 4) : String(now.getFullYear() - (m > now.getMonth() + 2 ? 1 : 0));
+  return y + String(m).padStart(2, '0');
+}
+let syncTimer = 0, syncing = false;
+function startAutoSync() { clearInterval(syncTimer); runSync(); syncTimer = setInterval(runSync, SYNC_MIN * 60000); }
+async function runSync() {
+  if (syncing || S.busy || S.autoBusy || !S.cloudFile) return;
+  if (!hasMicrosoftToken()) { clearInterval(syncTimer); set({ syncMsg: '로그인 만료 · OneDrive 다시 연결하면 동기화 재개' }); return; }
+  const ym = claimMonthKey();
+  if (!ym) { set({ syncMsg: '시트 이름에서 월을 찾지 못해 동기화하지 않았습니다' }); return; }
+  syncing = true;
+  try {
+    const ref = S.cloudFile, sheet = S.sheetName, ws = `/drives/${ref.driveId}/items/${ref.itemId}/workbook/worksheets('${encodeURIComponent(sheet.replace(/'/g, "''"))}')`;
+    const ur = await (await g(ws + '/usedRange?$select=address')).json();
+    const end = String(ur.address).split('!').pop().split(':').pop();
+    const endRow = parseInt(end.replace(/\D/g, '')) || 1, endCol = Math.max(NCOL, XLSX.utils.decode_col(end.replace(/[\d$]/g, '')) + 1);
+    const rng = await sheetRange(ref, sheet, `A1:${col(endCol)}${endRow}`);
+    const vals = rng.values || [], fms = rng.formulas || [];
+    const isF = (r, c) => String(fms[r]?.[c] ?? '').startsWith('=');
+    const xl = []; let last = 0;
+    for (let r = 1; r < vals.length; r++) { if (isBlank(vals[r][4]) && isBlank(vals[r][5])) continue; last = r; xl.push(r); }
+    const key = 'claims_v3_' + ym;
+    let app = []; try { app = JSON.parse(localStorage.getItem(key) || '[]') || []; } catch {}
+    const k = o => wbKey(o.waybill) + '|' + norm(o.product);
+    const pool = new Map(); app.forEach(a => { const kk = k(a); if (!pool.has(kk)) pool.set(kk, []); pool.get(kk).push(a); });
+    const matched = new Set(), fromXl = new Set(), rowWrites = [];
+    let addApp = 0, fillApp = 0, addXl = 0, fillXl = 0, idBase = Date.now() * 100;
+    const ACC = ['파손반송','파손수령','배송지연','송장흐름없음','분실','오배송'];
+    for (const r of xl) {
+      const row = vals[r], obj = {}; F_MAP.forEach(([c, f, t]) => obj[f] = fromCell(row[c], t));
+      const hit = (pool.get(k(obj)) || []).shift();
+      if (!hit) {
+        const n = { id: idBase++, ...obj, productList: obj.product, excluded: false };
+        if (!n.missingCode && obj.reason === '누락') n.missingCode = obj.productCode;
+        if (!n.accidentCode && ACC.includes(obj.reason)) n.accidentCode = obj.productCode;
+        app.push(n); fromXl.add(n); addApp++; continue;
+      }
+      matched.add(hit);
+      const out = fms[r].map((f, c) => isF(r, c) ? f : (row[c] ?? '')); let changed = false;
+      F_MAP.forEach(([c, f]) => {
+        const xv = obj[f], av = hit[f];
+        if (isBlank(av) && !isBlank(xv)) { hit[f] = xv; fillApp++; }
+        else if (isBlank(xv) && !isBlank(av) && !isF(r, c)) { out[c] = av; changed = true; fillXl++; }
+      });
+      if (changed) rowWrites.push({ r, out });
+    }
+    // 클레임 관리에만 있는 행 → 엑셀 마지막 송장 행 아래 빈 줄에 추가 (수식 칸은 그대로 / 없으면 윗줄 수식 복사)
+    const appOnly = app.filter(a => !matched.has(a) && !fromXl.has(a) && !isBlank(a.waybill));
+    let r = last + 1;
+    for (const a of appOnly) {
+      while (r < vals.length && (vals[r] || []).some((v, c) => !isF(r, c) && !isBlank(v))) r++;
+      const out = [];
+      for (let c = 0; c < endCol; c++) {
+        if (r < vals.length && isF(r, c)) out.push(fms[r][c]);
+        else if (r >= vals.length && isF(last, c)) out.push(Engine.shiftFormula(fms[last][c], 0, r - last));
+        else { const m = F_MAP.find(x => x[0] === c); out.push(m && !isBlank(a[m[1]]) ? a[m[1]] : ''); }
+      }
+      rowWrites.push({ r, out }); addXl++; r++;
+    }
+    for (const w of rowWrites) await g(rangeUrl(ref, sheet, `A${w.r + 1}:${col(endCol)}${w.r + 1}`), { method: 'PATCH', body: JSON.stringify({ formulas: [w.out] }) });
+    if (addApp || fillApp) localStorage.setItem(key, JSON.stringify(app));
+    const t = new Date().toTimeString().slice(0, 5);
+    set({ syncMsg: `${SYNC_MIN}분마다 자동 동기화 · 마지막 ${t} · 엑셀→클레임 관리 추가 ${addApp}·채움 ${fillApp} / 클레임 관리→엑셀 추가 ${addXl}·채움 ${fillXl}` });
+    if (rowWrites.length) { const book = Engine.load(await downloadWorkbook(ref)); if (book.byName[S.sheetName]) set({ wb: book }); }
+  } catch (err) { set({ syncMsg: '동기화 실패: ' + err.message }); }
+  finally { syncing = false; }
+}
+
 window.addEventListener('message', event => {
   if (event.data?.type === 'ms-code' && event.origin === location.origin) {
     exchangeCode(S.clientId, event.data.code, event.data.state).then(openCloudFile)
