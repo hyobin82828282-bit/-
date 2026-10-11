@@ -260,6 +260,7 @@ function render() {
     <input id="clientId" value="${esc(S.clientId)}" placeholder="Microsoft 앱 ID" aria-label="Microsoft 앱 ID">
     <input id="shareUrl" value="${esc(S.shareUrl)}" placeholder="클레임 엑셀 공유 링크 또는 Excel 웹 주소" aria-label="OneDrive 엑셀 공유 링크">
     <button class="btn" data-a="cloud" ${S.cloudBusy || !S.clientId || !S.shareUrl ? 'disabled' : ''}>${S.cloudBusy ? '연결 중…' : 'OneDrive 연결 및 파일 열기'}</button>
+    <button class="btn" data-a="memo" title="원송장번호별 비고·실결제금액·재출고송장 일괄 수정">📝 클레임 메모</button>
     ${S.cloudFile ? `<span class="muted">연결됨 · ${esc(S.cloudFile.fileName)}</span>` : ''}
     ${S.syncMsg ? `<span class="muted">🔄 ${esc(S.syncMsg)}</span>` : ''}
     <small>Microsoft 앱 ID와 현재 웹주소의 HTTPS 로그인 등록이 필요합니다.</small>
@@ -269,7 +270,6 @@ function render() {
       <select id="sheetSel">${S.wb.sheets.map(x => `<option ${x.name === S.sheetName ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
       <button class="btn" data-a="settings">조회 조건 설정</button>
       <button class="btn primary" data-a="build">조회 목록 만들기</button>
-      <button class="btn" data-a="memo" title="원송장번호별 비고·실결제금액·재출고송장 일괄 수정">📝 클레임 메모</button>
       <span class="muted">${esc(S.name)} · ${s.maxR - 1}행</span></div>
     <div class="panel claims-queue">
       <div class="claims-queue-head"><b>CJ 조회 대기 ${S.queue.length}건</b><div>
@@ -556,7 +556,7 @@ function memoPreview() {
   $('#memo-tbody').innerHTML = memoParsed.map(p => `<tr style="${p.rows.length ? '' : 'color:var(--danger)'}"><td>${esc(p.waybill)}</td><td>${esc(p.note)}</td><td class="num">${p.price != null ? p.price.toLocaleString() : ''}</td><td>${esc(p.reship)}</td><td>${p.rows.length ? p.rows.join(', ') + '행' : '없음'}</td></tr>`).join('');
   $('#memo-run').disabled = !ok;
 }
-function openMemo() { $('#memo-text').value = ''; memoPreview(); $('#memo-overlay').style.display = 'flex'; $('#memo-text').focus(); }
+function openMemo() { if (!S.wb || !sh()) { flash('클레임 엑셀을 먼저 열거나 OneDrive를 연결하세요.'); return; } $('#memo-text').value = ''; memoPreview(); $('#memo-overlay').style.display = 'flex'; $('#memo-text').focus(); }
 async function runMemo() {
   const s = sh(); if (!S.wb || !s) return;
   const mc = memoCols(), jobs = [];
