@@ -39,6 +39,19 @@ select:focus,input:focus{border-color:var(--accent);background:var(--surface)}
 .fare-draft.filled{border-color:var(--success);background:var(--success-bg)}
 @media(max-width:640px){.queue-row{grid-template-columns:1fr 1fr}.queue-row span{grid-column:1/-1}}
 .claims-table-wrap{overflow:auto;max-height:70vh}
+.xl-grid{width:max-content;border-collapse:collapse;font-size:11.5px;table-layout:fixed}
+.xl-grid th,.xl-grid td{border:1px solid #D4D4D4;padding:3px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;height:22px}
+.xl-grid th.xl-ch{overflow:visible}
+.xl-rs{position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:col-resize;z-index:4}
+.xl-rs:hover{background:#217346;opacity:.5}
+.xl-grid thead th.xl-ch{background:#F3F3F3;color:#555;text-align:center;font-weight:500;top:0;position:sticky;z-index:2}
+.xl-grid thead tr.xl-hdr th{background:#E8EEF7;color:#1F2937;font-weight:600;top:24px;position:sticky;z-index:2;text-align:center}
+.xl-grid .xl-rh{background:#F3F3F3;color:#555;text-align:center;min-width:34px;position:sticky;left:0;z-index:1;font-weight:500}
+.xl-grid thead .xl-rh{z-index:3}
+.xl-grid td.xl-f{color:#1F4E79}
+.xl-grid td.xl-fare{background:#FFF8E1;font-weight:600}
+.xl-grid td input{width:100%;min-width:0;border:0;background:transparent;font:inherit;padding:0}
+.xl-grid td input:focus{outline:2px solid #217346;background:#fff}
 table{width:100%;border-collapse:collapse;font-size:12px}
 thead th{position:sticky;top:0;background:var(--surface2);border-bottom:2px solid var(--border);padding:7px 8px;text-align:left;white-space:nowrap;font-weight:600;font-size:11px;color:var(--muted);z-index:2}
 tbody td{padding:4px 8px;border-bottom:1px solid var(--border);white-space:nowrap;vertical-align:middle}
@@ -245,6 +258,23 @@ function tableRows() {
 }
 
 // ---------- render ----------
+const XL_COLS = Array.from({ length: 24 }, (_, i) => i + 1); // A~X
+const XL_W_KEY = 'claims-excel.colw', XL_W_DEF = 100;
+let XL_W = {}; try { XL_W = JSON.parse(localStorage.getItem(XL_W_KEY) || '{}') || {}; } catch {}
+const colW = c => XL_W[c] || XL_W_DEF;
+document.addEventListener('mousedown', e => {
+  const h = e.target.closest('[data-rs]'); if (!h) return;
+  e.preventDefault();
+  const c = +h.dataset.rs, colEl = document.querySelector(`col[data-colw="${c}"]`), x0 = e.clientX, w0 = colW(c);
+  document.body.style.cursor = 'col-resize';
+  const move = ev => { XL_W[c] = Math.max(30, Math.round(w0 + ev.clientX - x0)); if (colEl) colEl.style.width = XL_W[c] + 'px'; };
+  const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); document.body.style.cursor = ''; localStorage.setItem(XL_W_KEY, JSON.stringify(XL_W)); };
+  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+});
+document.addEventListener('dblclick', e => {
+  const h = e.target.closest('[data-rs]'); if (!h) return;
+  delete XL_W[+h.dataset.rs]; localStorage.setItem(XL_W_KEY, JSON.stringify(XL_W)); render();
+});
 function render() {
   const s = sh(), { coolantCol } = cols();
   const hasDraft = Object.values(S.fareDrafts).some(v => Number(v) > 0);
@@ -282,10 +312,15 @@ function render() {
         <button class="btn" data-a="skip" data-row="${r.row}">조회 안 됨 · 건너뛰기</button></div>`).join('')}
       ${S.queue.length ? '' : '<p class="muted">조회 목록을 만들거나 통합내역을 가져오세요.</p>'}
     </div>
-    <div class="panel claims-table-wrap"><table><thead><tr><th>행</th><th>쇼핑몰</th><th>운송장번호</th><th>운임합계 (X열)</th><th>냉매</th><th>메모</th></tr></thead><tbody>
-      ${tableRows().map(r => `<tr><td class="num">${r.row}</td><td>${esc(r.mall)}</td><td>${esc(r.waybill)}</td><td class="num">${esc(r.fare) || '—'}</td>
-        <td>${coolantCol ? `<input data-coolant="${r.row}" value="${esc(r.coolant)}">` : '—'}</td>
-        <td><input data-note="${r.row}" value="${esc(r.note)}"></td></tr>`).join('')}
+    <div class="panel claims-table-wrap"><table class="xl-grid"><colgroup><col style="width:40px">${XL_COLS.map(c => `<col data-colw="${c}" style="width:${colW(c)}px">`).join('')}${coolantCol ? '' : '<col style="width:80px">'}${cols().noteCol ? '' : '<col style="width:160px">'}</colgroup><thead><tr><th class="xl-rh"></th>${XL_COLS.map(c => `<th class="xl-ch">${col(c)}<span class="xl-rs" data-rs="${c}" title="끌어서 너비 조절 · 더블클릭으로 기본값"></span></th>`).join('')}${coolantCol ? '' : '<th class="xl-ch">냉매</th>'}${cols().noteCol ? '' : '<th class="xl-ch">메모</th>'}</tr>
+      <tr class="xl-hdr"><th class="xl-rh">1</th>${XL_COLS.map(c => `<th>${esc(S.wb.display(s, col(c) + 1))}</th>`).join('')}${coolantCol ? '' : '<th></th>'}${cols().noteCol ? '' : '<th></th>'}</tr></thead><tbody>
+      ${tableRows().map(r => `<tr><td class="xl-rh">${r.row}</td>${XL_COLS.map(c => {
+          const ref = col(c) + r.row, v = S.wb.display(s, ref), isNum = typeof S.wb.value(s, ref) === 'number', f = s.cells[ref]?.f;
+          if (c === coolantCol) return `<td><input data-coolant="${r.row}" value="${esc(r.coolant)}"></td>`;
+          if (c === cols().noteCol) return `<td><input data-note="${r.row}" value="${esc(r.note)}"></td>`;
+          return `<td class="${isNum ? 'num' : ''}${f ? ' xl-f' : ''}${c === FARE_COL ? ' xl-fare' : ''}" title="${esc(v)}">${esc(v)}</td>`;
+        }).join('')}
+        ${coolantCol ? '' : '<td>—</td>'}${cols().noteCol ? '' : `<td><input data-note="${r.row}" value="${esc(r.note)}"></td>`}</tr>`).join('')}
     </tbody></table></div>`;
   } else {
     h += `<div class="panel empty">클레임 엑셀을 열거나 OneDrive에서 불러오세요.</div>`;
