@@ -259,6 +259,7 @@ function tableRows() {
 
 // ---------- render ----------
 const XL_COLS = Array.from({ length: 24 }, (_, i) => i + 1); // A~X
+const XL_PAGE = 200; let xlLimit = XL_PAGE, allRows = [], shown = [], NC = 0;
 const XL_W_KEY = 'claims-excel.colw', XL_W_DEF = 100;
 let XL_W = {}; try { XL_W = JSON.parse(localStorage.getItem(XL_W_KEY) || '{}') || {}; } catch {}
 const colW = c => XL_W[c] || XL_W_DEF;
@@ -278,7 +279,8 @@ document.addEventListener('dblclick', e => {
   delete XL_W[+h.dataset.rs]; localStorage.setItem(XL_W_KEY, JSON.stringify(XL_W)); render();
 });
 function render() {
-  const s = sh(), { coolantCol } = cols();
+  const s = sh(), { coolantCol, noteCol: _nc } = cols();
+  NC = _nc; allRows = S.wb && s ? tableRows() : []; shown = allRows.slice(0, xlLimit);
   const hasDraft = Object.values(S.fareDrafts).some(v => Number(v) > 0);
   let h = `<div class="panel claims-head">
     <div><h2>월 클레임 관리</h2><p>원본 엑셀을 열고 필요한 값만 수정합니다. 수식 셀은 보호됩니다.</p></div>
@@ -314,16 +316,16 @@ function render() {
         <button class="btn" data-a="skip" data-row="${r.row}">조회 안 됨 · 건너뛰기</button></div>`).join('')}
       ${S.queue.length ? '' : '<p class="muted">조회 목록을 만들거나 통합내역을 가져오세요.</p>'}
     </div>
-    <div class="panel claims-table-wrap"><table class="xl-grid" style="width:${xlTableW(coolantCol, cols().noteCol)}px"><colgroup><col style="width:40px">${XL_COLS.map(c => `<col data-colw="${c}" style="width:${colW(c)}px">`).join('')}${coolantCol ? '' : '<col style="width:80px">'}${cols().noteCol ? '' : '<col style="width:160px">'}</colgroup><thead><tr><th class="xl-rh"></th>${XL_COLS.map(c => `<th class="xl-ch">${col(c)}<span class="xl-rs" data-rs="${c}" title="끌어서 너비 조절 · 더블클릭으로 기본값"></span></th>`).join('')}${coolantCol ? '' : '<th class="xl-ch">냉매</th>'}${cols().noteCol ? '' : '<th class="xl-ch">메모</th>'}</tr>
-      <tr class="xl-hdr"><th class="xl-rh">1</th>${XL_COLS.map(c => `<th>${esc(S.wb.display(s, col(c) + 1))}</th>`).join('')}${coolantCol ? '' : '<th></th>'}${cols().noteCol ? '' : '<th></th>'}</tr></thead><tbody>
-      ${tableRows().map(r => `<tr><td class="xl-rh">${r.row}</td>${XL_COLS.map(c => {
+    <div class="panel claims-table-wrap"><table class="xl-grid" style="width:${xlTableW(coolantCol, NC)}px"><colgroup><col style="width:40px">${XL_COLS.map(c => `<col data-colw="${c}" style="width:${colW(c)}px">`).join('')}${coolantCol ? '' : '<col style="width:80px">'}${NC ? '' : '<col style="width:160px">'}</colgroup><thead><tr><th class="xl-rh"></th>${XL_COLS.map(c => `<th class="xl-ch">${col(c)}<span class="xl-rs" data-rs="${c}" title="끌어서 너비 조절 · 더블클릭으로 기본값"></span></th>`).join('')}${coolantCol ? '' : '<th class="xl-ch">냉매</th>'}${NC ? '' : '<th class="xl-ch">메모</th>'}</tr>
+      <tr class="xl-hdr"><th class="xl-rh">1</th>${XL_COLS.map(c => `<th>${esc(S.wb.display(s, col(c) + 1))}</th>`).join('')}${coolantCol ? '' : '<th></th>'}${NC ? '' : '<th></th>'}</tr></thead><tbody>
+      ${shown.map(r => `<tr><td class="xl-rh">${r.row}</td>${XL_COLS.map(c => {
           const ref = col(c) + r.row, v = S.wb.display(s, ref), isNum = typeof S.wb.value(s, ref) === 'number', f = s.cells[ref]?.f;
           if (c === coolantCol) return `<td><input data-coolant="${r.row}" value="${esc(r.coolant)}"></td>`;
-          if (c === cols().noteCol) return `<td><input data-note="${r.row}" value="${esc(r.note)}"></td>`;
+          if (c === NC) return `<td><input data-note="${r.row}" value="${esc(r.note)}"></td>`;
           return `<td class="${isNum ? 'num' : ''}${f ? ' xl-f' : ''}${c === FARE_COL ? ' xl-fare' : ''}" title="${esc(v)}">${esc(v)}</td>`;
         }).join('')}
-        ${coolantCol ? '' : '<td>—</td>'}${cols().noteCol ? '' : `<td><input data-note="${r.row}" value="${esc(r.note)}"></td>`}</tr>`).join('')}
-    </tbody></table></div>`;
+        ${coolantCol ? '' : '<td>—</td>'}${NC ? '' : `<td><input data-note="${r.row}" value="${esc(r.note)}"></td>`}</tr>`).join('')}
+    </tbody></table>${allRows.length > shown.length ? `<div style="padding:10px;text-align:center"><button class="btn" data-a="moreRows">아래 ${Math.min(XL_PAGE, allRows.length - shown.length)}행 더 보기 (${shown.length}/${allRows.length})</button></div>` : ''}</div>`;
   } else {
     h += `<div class="panel empty">클레임 엑셀을 열거나 OneDrive에서 불러오세요.</div>`;
   }
@@ -716,6 +718,7 @@ document.addEventListener('click', e => {
     open: () => $('#fileIn').click(), import: () => $('#importIn').click(), export: exportFile, cloud: connectCloud,
     settings: () => set({ settingsOpen: true }), closeSettings: () => set({ settingsOpen: false }), build: buildQueue,
     auto: autoLookup, saveAll: saveAllFares, memo: openMemo,
+    moreRows: () => { xlLimit += XL_PAGE; render(); },
     memoCancel: () => { $('#memo-overlay').style.display = 'none'; }, memoRun: runMemo,
     memoFile: () => { const f = $('#memo-file'); f.value = ''; f.click(); }, skip: () => set({ queue: S.queue.filter(x => x.row !== row) }),
     cj: () => {
