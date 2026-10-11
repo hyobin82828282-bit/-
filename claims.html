@@ -428,6 +428,11 @@ function claimMonthKey() {
   const y = cur && parseInt(cur.slice(4)) === m ? cur.slice(0, 4) : String(now.getFullYear() - (m > now.getMonth() + 2 ? 1 : 0));
   return y + String(m).padStart(2, '0');
 }
+function syncBase() {
+  const m = location.hash.match(/sync=([^&]+)/);
+  if (m) try { localStorage.setItem('mw_sync_url', decodeURIComponent(m[1])); } catch {}
+  return (localStorage.getItem('mw_sync_url') || '').trim().replace(/\/+$/, '');
+}
 let syncTimer = 0, syncing = false;
 function startAutoSync() { clearInterval(syncTimer); runSync(); syncTimer = setInterval(runSync, SYNC_MIN * 60000); }
 async function runSync() {
@@ -448,6 +453,17 @@ async function runSync() {
     for (let r = 1; r < vals.length; r++) { if (isBlank(vals[r][4]) && isBlank(vals[r][5])) continue; last = r; xl.push(r); }
     const key = 'claims_v3_' + ym;
     let app = []; try { app = JSON.parse(localStorage.getItem(key) || '[]') || []; } catch {}
+    // 클레임 관리가 다른 사이트에서 열려도 같은 데이터를 쓰도록 공유 서버 값을 기준으로 사용
+    const base = syncBase(), rkey = id => String(id).replace(/[.#$\[\]\/%]/g, '_');
+    let remoteOk = false;
+    if (base) {
+      try {
+        const rm = await (await fetch(base + '/mw/claims/' + ym + '.json')).json() || {};
+        const rows = []; Object.values(rm).forEach(v => { if (v && v.j && !v.del) try { rows.push(JSON.parse(v.j)); } catch {} });
+        if (rows.length) { app = rows; remoteOk = true; }
+      } catch {}
+    }
+    const before = new Map(app.map(a => [a.id, JSON.stringify(a)]));
     const k = o => wbKey(o.waybill) + '|' + norm(o.product);
     const pool = new Map(); app.forEach(a => { const kk = k(a); if (!pool.has(kk)) pool.set(kk, []); pool.get(kk).push(a); });
     const matched = new Set(), fromXl = new Set(), rowWrites = [];
@@ -492,7 +508,13 @@ async function runSync() {
       rowWrites.push({ r, out }); addXl++; r++;
     }
     for (const w of rowWrites) await g(rangeUrl(ref, sheet, `A${w.r + 1}:${col(endCol)}${w.r + 1}`), { method: 'PATCH', body: JSON.stringify({ formulas: [w.out] }) });
-    if (addApp || fillApp) localStorage.setItem(key, JSON.stringify(app));
+    if (addApp || fillApp) {
+      localStorage.setItem(key, JSON.stringify(app));
+      if (base && (remoteOk || !before.size)) for (const a of app) {
+        const s = JSON.stringify(a); if (before.get(a.id) === s) continue;
+        try { await fetch(base + '/mw/claims/' + ym + '/' + rkey(a.id) + '.json', { method: 'PUT', body: JSON.stringify({ j: s, at: Date.now(), by: '엑셀동기화' }) }); } catch {}
+      }
+    }
     const t = new Date().toTimeString().slice(0, 5);
     set({ syncMsg: `${SYNC_MIN}분마다 자동 동기화 · 마지막 ${t} · 엑셀→클레임 관리 추가 ${addApp}·채움 ${fillApp} / 클레임 관리→엑셀 추가 ${addXl}·채움 ${fillXl}` });
     if (rowWrites.length) { const book = Engine.load(await downloadWorkbook(ref)); if (book.byName[S.sheetName]) set({ wb: book }); }
