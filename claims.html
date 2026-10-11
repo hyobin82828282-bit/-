@@ -471,7 +471,9 @@ async function runSync() {
       const out = fms[r].map((f, c) => isF(r, c) ? f : (row[c] ?? '')); let changed = false;
       F_MAP.forEach(([c, f]) => {
         const xv = obj[f], av = hit[f];
-        if (isBlank(av) && !isBlank(xv)) { hit[f] = xv; fillApp++; }
+        // 재출고송장 칸의 '재출고' 같은 표시 글자는 엑셀의 실제 송장번호로 교체
+        const placeholder = f === 'reship' && !isBlank(av) && !/\d{6,}/.test(String(av)) && /\d{6,}/.test(String(xv ?? ''));
+        if ((isBlank(av) || placeholder) && !isBlank(xv)) { hit[f] = xv; fillApp++; }
         else if (isBlank(xv) && !isBlank(av) && !isF(r, c)) { out[c] = av; changed = true; fillXl++; }
       });
       if (changed) rowWrites.push({ r, out });
