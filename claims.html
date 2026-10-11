@@ -69,6 +69,21 @@ const EST = {"deliveryMap":{"극소 1호":1980,"2호":1980,"두껍 2호":1980,"3
 <div id="flash"></div>
 <input id="fileIn" type="file" accept=".xlsx,.xlsm" hidden>
 <input id="importIn" type="file" accept=".xlsx,.xlsm" hidden>
+<div id="memo-overlay" class="modal-back" style="display:none">
+  <div class="modal" role="dialog" aria-modal="true" style="max-width:760px;max-height:90vh;overflow:auto">
+    <div class="modal-title">📝 클레임 메모 일괄 반영</div>
+    <div class="modal-body" style="line-height:1.6">원송장번호 / 비고 / 실결제금액을 한 줄에 한 건씩 적어주세요. 순서·구분자는 상관없습니다.<br>예: <code>302041725895 기사님 임의배송 완료 8400원</code><br>재출고 송장번호는 숫자 앞에 "재출고"를 붙이면 재출고송장(R열)에 들어갑니다. 예: <code>302041725895 재출고 302099998888 기사님 임의배송 완료 8400원</code></div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn" data-a="memoFile">📂 메모장·엑셀 파일 불러오기</button>
+      <input type="file" id="memo-file" accept=".txt,.csv,.xlsx,.xls" hidden>
+      <span id="memo-summary" class="muted" style="margin-left:auto"></span>
+    </div>
+    <textarea id="memo-text" placeholder="여기에 붙여넣거나 파일을 불러오세요" style="height:140px;resize:vertical;font-family:inherit;font-size:12px;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea>
+    <div style="max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:6px"><table><thead><tr><th>원송장번호</th><th>비고</th><th>실결제금액</th><th>재출고송장</th><th>대상 행</th></tr></thead><tbody id="memo-tbody"></tbody></table></div>
+    <div class="muted">같은 송장에 여러 행이 있으면 비고·재출고는 모든 행에, 실결제금액은 첫 행에만 들어갑니다. 수식 칸은 건드리지 않습니다. 빨간 줄은 현재 시트에 없는 송장입니다.</div>
+    <div class="modal-actions"><button class="btn" data-a="memoCancel">취소</button><button class="btn primary" id="memo-run" data-a="memoRun" disabled>반영</button></div>
+  </div>
+</div>
 <script>
 (() => {
 const CJ_ORIGIN = 'https://loisparcelp.cjlogistics.com', CJ_URL = CJ_ORIGIN + '/index.do';
@@ -254,6 +269,7 @@ function render() {
       <select id="sheetSel">${S.wb.sheets.map(x => `<option ${x.name === S.sheetName ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
       <button class="btn" data-a="settings">조회 조건 설정</button>
       <button class="btn primary" data-a="build">조회 목록 만들기</button>
+      <button class="btn" data-a="memo" title="원송장번호별 비고·실결제금액·재출고송장 일괄 수정">📝 클레임 메모</button>
       <span class="muted">${esc(S.name)} · ${s.maxR - 1}행</span></div>
     <div class="panel claims-queue">
       <div class="claims-queue-head"><b>CJ 조회 대기 ${S.queue.length}건</b><div>
@@ -506,6 +522,65 @@ async function saveNote(row, value) {
     memos[refNoteKey(S.cloudFile, S.sheetName, row)] = value; localStorage.setItem('claims-notes:' + S.name, JSON.stringify(memos));
   }
 }
+// ---------- 클레임 메모 일괄 반영 (클레임 관리와 같은 방식) ----------
+function parseMemoLine(line) {
+  let s = String(line).replace(/\t/g, ' ').trim();
+  if (!s) return null;
+  let reship = '';
+  s = s.replace(/재출고\s*(?:송장)?\s*[:：]?\s*(\d[\d-]{8,16}\d)/, (m, n) => { reship = n.replace(/-/g, ''); return ' '; });
+  const wm = s.match(/(?<!\d)\d{4}-?\d{4}-?\d{4}(?!\d)|(?<!\d)\d{10,14}(?!\d)/);
+  if (!wm) return null;
+  const waybill = wm[0].replace(/-/g, '');
+  s = s.replace(wm[0], ' ');
+  let price = null;
+  const am = s.match(/(\d{1,3}(?:,\d{3})+|\d+)\s*원/) || s.match(/(?:^|\s)(\d{1,3}(?:,\d{3})+|\d{3,7})(?=\s|$)/);
+  if (am) { price = +am[1].replace(/,/g, ''); s = s.replace(am[0], ' '); }
+  const note = s.replace(/[\/|,;]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return { waybill, reship, price, note };
+}
+function memoCols() {
+  const s = sh();
+  return { note: headerCol(S.wb, s, ['비고', '메모'], 22), price: headerCol(S.wb, s, ['실결제'], 23), reship: headerCol(S.wb, s, ['재출고'], 18) };
+}
+function memoTargets(wbNo) {
+  const s = sh(), { waybillCol } = cols(), out = [];
+  if (!s) return out;
+  for (let r = 2; r <= s.maxR; r++) if (norm(S.wb.value(s, col(waybillCol) + r)).replace(/\D/g, '') === wbNo) out.push(r);
+  return out;
+}
+let memoParsed = [];
+function memoPreview() {
+  memoParsed = $('#memo-text').value.split(/\r?\n/).map(parseMemoLine).filter(Boolean).map(p => ({ ...p, rows: memoTargets(p.waybill) }));
+  const ok = memoParsed.filter(p => p.rows.length).length;
+  $('#memo-summary').textContent = memoParsed.length ? `인식 ${memoParsed.length}건 · 반영 가능 ${ok}건 · 시트에 없음 ${memoParsed.length - ok}건` : '';
+  $('#memo-tbody').innerHTML = memoParsed.map(p => `<tr style="${p.rows.length ? '' : 'color:var(--danger)'}"><td>${esc(p.waybill)}</td><td>${esc(p.note)}</td><td class="num">${p.price != null ? p.price.toLocaleString() : ''}</td><td>${esc(p.reship)}</td><td>${p.rows.length ? p.rows.join(', ') + '행' : '없음'}</td></tr>`).join('');
+  $('#memo-run').disabled = !ok;
+}
+function openMemo() { $('#memo-text').value = ''; memoPreview(); $('#memo-overlay').style.display = 'flex'; $('#memo-text').focus(); }
+async function runMemo() {
+  const s = sh(); if (!S.wb || !s) return;
+  const mc = memoCols(), jobs = [];
+  memoParsed.forEach(p => p.rows.forEach((r, i) => {
+    if (p.note) jobs.push([r, col(mc.note) + r, p.note]);
+    if (p.reship) jobs.push([r, col(mc.reship) + r, p.reship]);
+    if (p.price != null && i === 0) jobs.push([r, col(mc.price) + r, p.price]);
+  }));
+  const btn = $('#memo-run'); btn.disabled = true;
+  let ok = 0, skip = 0, fail = '';
+  for (let i = 0; i < jobs.length; i++) {
+    const [r, ref, v] = jobs[i]; btn.textContent = `반영 중 ${i + 1}/${jobs.length}`;
+    const cell = s.cells[ref];
+    if (cell?.f && !cell.fAdded) { skip++; continue; }
+    try { await syncCloudCell(r, ref, v); S.wb.setCell(S.sheetName, ref, v); ok++; }
+    catch (err) { fail = err.message; skip++; }
+  }
+  btn.textContent = '반영';
+  $('#memo-overlay').style.display = 'none';
+  render();
+  const lines = memoParsed.filter(p => p.rows.length).length;
+  flash(`${lines}건 · ${ok}칸 반영${skip ? ` · ${skip}칸 건너뜀(수식/오류)` : ''}${fail ? ' · ' + fail : ''}${S.cloudFile ? '' : ' · 엑셀 내보내기로 저장하세요'}`);
+}
+
 async function saveCoolant(row, value) {
   const wb = S.wb, s = sh(), { coolantCol } = cols();
   if (!wb || !s || !coolantCol) return;
@@ -603,7 +678,9 @@ document.addEventListener('click', e => {
   ({
     open: () => $('#fileIn').click(), import: () => $('#importIn').click(), export: exportFile, cloud: connectCloud,
     settings: () => set({ settingsOpen: true }), closeSettings: () => set({ settingsOpen: false }), build: buildQueue,
-    auto: autoLookup, saveAll: saveAllFares, skip: () => set({ queue: S.queue.filter(x => x.row !== row) }),
+    auto: autoLookup, saveAll: saveAllFares, memo: openMemo,
+    memoCancel: () => { $('#memo-overlay').style.display = 'none'; }, memoRun: runMemo,
+    memoFile: () => { const f = $('#memo-file'); f.value = ''; f.click(); }, skip: () => set({ queue: S.queue.filter(x => x.row !== row) }),
     cj: () => {
       const r = S.queue.find(x => x.row === row);
       navigator.clipboard?.writeText(r.waybill).catch(() => {});
@@ -614,6 +691,7 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('input', e => {
   const t = e.target;
+  if (t.id === 'memo-text') { memoPreview(); return; }
   if (t.dataset.fare) {
     t.value = t.value.replace(/[^0-9]/g, '');
     S.fareDrafts = { ...S.fareDrafts, [t.dataset.fare]: t.value };
@@ -626,6 +704,18 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => {
   const t = e.target;
+  if (t.id === 'memo-file') {
+    const file = t.files[0]; if (!file) return;
+    const isText = /\.(txt|csv)$/i.test(file.name), reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const text = isText ? ev.target.result : (wbk => wbk.SheetNames.map(n => XLSX.utils.sheet_to_json(wbk.Sheets[n], { header: 1, defval: '', raw: false }).map(r => r.join(' ')).join('\n')).join('\n'))(XLSX.read(ev.target.result, { type: 'array' }));
+        $('#memo-text').value = text; memoPreview();
+      } catch (err) { flash('파일을 읽지 못했습니다: ' + err.message); }
+    };
+    isText ? reader.readAsText(file, 'utf-8') : reader.readAsArrayBuffer(file);
+    return;
+  }
   if (t.id === 'sheetSel') set({ sheetName: t.value });
   else if (t.name === 'freight-mode') set({ mode: t.value });
   else if (t.id === 'fileIn' || t.id === 'importIn') { const f = t.files?.[0]; t.value = ''; if (f) (t.id === 'fileIn' ? openFile : importIntegrated)(f); }
