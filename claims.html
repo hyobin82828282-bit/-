@@ -441,7 +441,7 @@ function syncBase() {
 }
 // 클레임 관리 화면에서 사유로 자동 표시되는 누락/사고 칸·택배사고접수도 엑셀에 같이 적음
 function derived(a) {
-  const d = { ...a }, nul = a.reason === '누락', acc = ['파손반송','파손수령','배송지연','송장흐름없음','분실','오배송','오출고'].includes(a.reason);
+  const d = { ...a }, nul = a.reason === '누락', acc = ['파손반송','파손수령','배송지연','송장흐름없음','분실','오배송','오출고'].includes(a.reason) || (!nul && a.type === '택배사고');
   const fill = (f, v) => { if (isBlank(d[f]) && !isBlank(v)) d[f] = v; };
   if (nul) { fill('missingCode', a.productCode); fill('missing', a.product); fill('misQty', a.qty); }
   if (acc) { fill('accidentCode', a.productCode); fill('accident', a.product); fill('accQty', a.qty); }
