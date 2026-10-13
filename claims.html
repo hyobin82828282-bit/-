@@ -449,6 +449,11 @@ function derived(a) {
   if (a.type === '아워사고') d.courierOk = 'X';
   return d;
 }
+// 「택배사고 접수」 시트 한 줄 (A 고객사 ~ L 면세 여부/비고)
+function courierRowVals(a) {
+  const n = v => isBlank(v) ? '' : (+String(v).replace(/,/g, '') || 0);
+  return ['목우촌', String(a.waybill || ''), a.ship || '', a.name || '', a.reason || '', n(a.price) || 0, a.reship || '', a.photo || '', n(a.claimDelivery) || 0, n(a.retFee), a.retWaybill || '', a.note || ''];
+}
 let syncTimer = 0, syncing = false;
 function startAutoSync() { clearInterval(syncTimer); runSync(); syncTimer = setInterval(runSync, SYNC_MIN * 60000); }
 async function runSync() {
@@ -574,6 +579,50 @@ async function runSync() {
     for (const dr of rowDeletes.sort((a, b) => b - a)) { await gw(rangeUrl(ref, sheet, `${dr + 1}:${dr + 1}`) + '/delete', { method: 'POST', body: JSON.stringify({ shift: 'Up' }) }); delXl++; }
     appOnly.forEach(a => { snap[a.id] = snapOf(derived(a)); });
     try { localStorage.setItem(SNAP_KEY, JSON.stringify(snap)); } catch {}
+    // ---------- 「택배사고 접수」 시트: 택배사고접수 '필요' 건 추가(행은 지우지 않음) · 사진유무/반품택배비/반품송장 양쪽 동기화 ----------
+    let cMsg = '';
+    try {
+      const CS = '택배사고 접수';
+      const crng = await sheetRange(ref, CS, 'A1:L1500');
+      const cv = crng.values || [], cf = crng.formulas || [];
+      const CSNAP_KEY = 'claims-excel.csnap.' + ym; let csnap = {}; try { csnap = JSON.parse(localStorage.getItem(CSNAP_KEY) || '{}') || {}; } catch {}
+      const pend = x => String(x.courierOk || '').trim() === '필요';
+      const byWb = new Map(); app.forEach(a => { const w = wbKey(a.waybill); if (!w) return; if (!byWb.has(w)) byWb.set(w, []); byWb.get(w).push(a); });
+      const EDIT = [[7, 'photo'], [9, 'retFee', 'n'], [10, 'retWaybill']];
+      const snapC = a => ({ photo: sv(a.photo), retFee: sv(a.retFee), retWaybill: sv(a.retWaybill) });
+      const seenW = new Set(), cWrites = []; let lastC = 0, cAdd = 0, cFill = 0;
+      for (let r = 1; r < cv.length; r++) {
+        const row = cv[r] || [];
+        if (row.some(v => !isBlank(v))) lastC = r;
+        const w = wbKey(row[1]); if (!w) continue;
+        seenW.add(w);
+        const list = byWb.get(w); if (!list) continue;
+        const a = list.find(pend) || list[0];
+        const isFm = c => String(cf[r]?.[c] ?? '').startsWith('=');
+        const out = new Array(12).fill(null); let ch = false;
+        EDIT.forEach(([c, f, t]) => {
+          const xv = fromCell(row[c], t), av = a[f] ?? '', b = csnap[w] ? csnap[w][f] : undefined;
+          if (same(av, xv)) return;
+          const xlCh = b !== undefined ? (same(av, b) && !same(xv, b)) : isBlank(av);
+          if (xlCh) { list.forEach(x => { x[f] = xv; }); fillApp++; cFill++; }
+          else if (!isFm(c)) { out[c] = isBlank(av) ? '' : av; ch = true; cFill++; }
+        });
+        // 나머지 칸은 엑셀이 비어 있을 때만 채움
+        const base = courierRowVals(a);
+        [2, 3, 4, 5, 6, 8, 11].forEach(c => { if (isBlank(row[c]) && !isFm(c) && !isBlank(base[c]) && base[c] !== 0) { out[c] = base[c]; ch = true; } });
+        csnap[w] = snapC(a);
+        if (ch) cWrites.push({ r, out });
+      }
+      let nr = lastC + 1;
+      for (const [w, list] of byWb) {
+        if (seenW.has(w)) continue;
+        const a = list.find(pend); if (!a) continue;
+        cWrites.push({ r: nr++, out: courierRowVals(a) }); seenW.add(w); csnap[w] = snapC(a); cAdd++;
+      }
+      for (const wr of cWrites) await gw(rangeUrl(ref, CS, `A${wr.r + 1}:L${wr.r + 1}`), { method: 'PATCH', body: JSON.stringify({ formulas: [wr.out] }) });
+      try { localStorage.setItem(CSNAP_KEY, JSON.stringify(csnap)); } catch {}
+      cMsg = ` / 택배사고 접수 추가 ${cAdd}·채움 ${cFill}`;
+    } catch (e) { cMsg = ' / 택배사고 접수 시트 동기화 실패: ' + e.message; }
     if (addApp || fillApp) {
       // 동기화하는 동안 클레임 관리에서 고친 값이 있을 수 있으니, 최신 데이터에 이번에 바뀐 칸만 덮어씀
       let latest = null;
@@ -600,7 +649,7 @@ async function runSync() {
       try { localStorage.setItem(SNAP_KEY, JSON.stringify(snap)); } catch {}
     }
     const t = new Date().toTimeString().slice(0, 5);
-    set({ syncMsg: `${SYNC_MIN}분마다 자동 동기화 · 마지막 ${t} · 엑셀→클레임 관리 추가 ${addApp}·채움 ${fillApp} / 클레임 관리→엑셀 추가 ${addXl}·채움 ${fillXl}·삭제 ${delXl}` });
+    set({ syncMsg: `${SYNC_MIN}분마다 자동 동기화 · 마지막 ${t} · 엑셀→클레임 관리 추가 ${addApp}·채움 ${fillApp} / 클레임 관리→엑셀 추가 ${addXl}·채움 ${fillXl}·삭제 ${delXl}${cMsg}` });
     if (rowWrites.length || rowDeletes.length) { const book = Engine.load(await downloadWorkbook(ref)); if (book.byName[S.sheetName]) set({ wb: book }); }
   } catch (err) { set({ syncMsg: '동기화 실패: ' + err.message }); }
   finally { syncing = false; }
