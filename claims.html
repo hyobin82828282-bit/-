@@ -450,9 +450,11 @@ function derived(a) {
   return d;
 }
 // 「택배사고 접수」 시트 한 줄 (A 고객사 ~ L 면세 여부/비고)
-function courierRowVals(a) {
+function courierRowVals(a, list) {
   const n = v => isBlank(v) ? '' : (+String(v).replace(/,/g, '') || 0);
-  return ['목우촌', String(a.waybill || ''), a.ship || '', a.name || '', a.reason || '', n(a.price) || 0, a.reship || '', a.photo || '', n(a.claimDelivery) || 0, n(a.retFee), a.retWaybill || '', a.note || ''];
+  // 같은 송장이 여러 줄이면 판매내역서금액은 합계
+  const price = (list && list.length ? list : [a]).reduce((s, x) => s + (n(x.price) || 0), 0);
+  return ['목우촌', String(a.waybill || ''), a.ship || '', a.name || '', a.reason || '', price, a.reship || '', a.photo || '', n(a.claimDelivery) || 0, n(a.retFee), a.retWaybill || '', a.note || ''];
 }
 let syncTimer = 0, syncing = false;
 function startAutoSync() { clearInterval(syncTimer); runSync(); syncTimer = setInterval(runSync, SYNC_MIN * 60000); }
@@ -608,7 +610,7 @@ async function runSync() {
           else if (!isFm(c)) { out[c] = isBlank(av) ? '' : av; ch = true; cFill++; }
         });
         // 나머지 칸은 엑셀이 비어 있을 때만 채움
-        const base = courierRowVals(a);
+        const base = courierRowVals(a, list);
         [2, 3, 4, 5, 6, 8, 11].forEach(c => { if (isBlank(row[c]) && !isFm(c) && !isBlank(base[c]) && base[c] !== 0) { out[c] = base[c]; ch = true; } });
         csnap[w] = snapC(a);
         if (ch) cWrites.push({ r, out });
@@ -617,7 +619,12 @@ async function runSync() {
       for (const [w, list] of byWb) {
         if (seenW.has(w)) continue;
         const a = list.find(pend); if (!a) continue;
-        cWrites.push({ r: nr++, out: courierRowVals(a) }); seenW.add(w); csnap[w] = snapC(a); cAdd++;
+        // 수식이 있는 칸(예: F 판매내역서금액 SUMIFS)은 값 대신 수식 유지/복사
+        const vals0 = courierRowVals(a, list), r0 = nr++;
+        const isFmAt = (rr, c) => String(cf[rr]?.[c] ?? '').startsWith('=');
+        const tpl = (() => { for (let q = lastC; q >= 1; q--) if ((cf[q] || []).some((_, c) => isFmAt(q, c))) return q; return 0; })();
+        const out = vals0.map((v, c) => r0 < cf.length && isFmAt(r0, c) ? null : (tpl && isFmAt(tpl, c) ? Engine.shiftFormula(cf[tpl][c], 0, r0 - tpl) : v));
+        cWrites.push({ r: r0, out }); seenW.add(w); csnap[w] = snapC(a); cAdd++;
       }
       for (const wr of cWrites) await gw(rangeUrl(ref, CS, `A${wr.r + 1}:L${wr.r + 1}`), { method: 'PATCH', body: JSON.stringify({ formulas: [wr.out] }) });
       try { localStorage.setItem(CSNAP_KEY, JSON.stringify(csnap)); } catch {}
