@@ -541,7 +541,8 @@ async function runSync() {
           // 클레임 관리에서 직접 고친 값(지난 동기화 이후 클레임 관리만 바뀜)은 엑셀 수식 칸에 값으로 적음 → 수식 결과로 되돌아가지 않게
           if (b !== undefined && !isBlank(av) && !same(av, b) && same(xv, b)) { out[c] = av; changed = true; fillXl++; }
           else if (INPUT.has(f)) { if (isBlank(av)) { hit[f] = xv; fillApp++; } else if (isBlank(xv)) { out[c] = av; changed = true; fillXl++; } }
-          else if (!isBlank(xv)) { hit[f] = xv; fillApp++; }
+          // 수식 결과는 클레임 관리 칸이 비었거나, 클레임 관리 값이 지난 동기화 그대로일 때만 가져옴 (직접 고친 값 보존)
+          else if (!isBlank(xv) && (isBlank(hit[f]) || (b !== undefined && same(av, b)))) { hit[f] = xv; fillApp++; }
         }
         else if (xlChanged) { hit[f] = isBlank(xv) ? '' : xv; fillApp++; }
         else if (!isF(r, c) && !(isBlank(av) && b === undefined)) { out[c] = isBlank(av) ? '' : av; changed = true; fillXl++; }
@@ -573,6 +574,23 @@ async function runSync() {
     appOnly.forEach(a => { snap[a.id] = snapOf(derived(a)); });
     try { localStorage.setItem(SNAP_KEY, JSON.stringify(snap)); } catch {}
     if (addApp || fillApp) {
+      // 동기화하는 동안 클레임 관리에서 고친 값이 있을 수 있으니, 최신 데이터에 이번에 바뀐 칸만 덮어씀
+      let latest = null;
+      if (base && remoteOk) try {
+        const rm2 = await (await fetch(base + '/mw/claims/' + ym + '.json', { cache: 'no-store' })).json() || {};
+        const rows2 = []; Object.values(rm2).forEach(v => { if (v && v.j && !v.del) try { rows2.push(JSON.parse(v.j)); } catch {} });
+        if (rows2.length) latest = rows2;
+      } catch {}
+      if (!latest) try { latest = JSON.parse(localStorage.getItem(key) || '[]') || []; } catch { latest = []; }
+      const byId = new Map(latest.map(x => [x.id, x]));
+      for (const a of app) {
+        const pj = before.get(a.id), cur = byId.get(a.id);
+        if (!cur) { if (!pj) { latest.push(a); byId.set(a.id, a); } continue; }
+        if (pj === JSON.stringify(a)) continue;
+        const p = pj ? JSON.parse(pj) : {};
+        Object.keys(a).forEach(f => { if (!same(a[f], p[f])) cur[f] = a[f]; });
+      }
+      app = latest;
       localStorage.setItem(key, JSON.stringify(app));
       if (base && (remoteOk || !before.size)) for (const a of app) {
         const s = JSON.stringify(a); if (before.get(a.id) === s) continue;
