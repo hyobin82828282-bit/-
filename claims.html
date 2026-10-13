@@ -445,8 +445,9 @@ function derived(a) {
   const fill = (f, v) => { if (isBlank(d[f]) && !isBlank(v)) d[f] = v; };
   if (nul) { fill('missingCode', a.productCode); fill('missing', a.product); fill('misQty', a.qty); }
   if (acc) { fill('accidentCode', a.productCode); fill('accident', a.product); fill('accQty', a.qty); }
-  if (a.type === '택배사고') fill('courierOk', '필요');
-  if (a.type === '아워사고') d.courierOk = 'X';
+  const type = a.type || WB_TYPE[wbKey(a.waybill)] || '';
+  if (type === '택배사고') fill('courierOk', '필요');
+  if (type === '아워사고') d.courierOk = 'X';
   return d;
 }
 // 「택배사고 접수」 시트 한 줄 (A 고객사 ~ L 면세 여부/비고)
@@ -456,7 +457,7 @@ function courierRowVals(a, list) {
   const price = (list && list.length ? list : [a]).reduce((s, x) => s + (n(x.price) || 0), 0);
   return ['목우촌', String(a.waybill || ''), a.ship || '', a.name || '', a.reason || '', price, a.reship || '', a.photo || '', n(a.claimDelivery) || 0, n(a.retFee), a.retWaybill || '', a.note || ''];
 }
-let syncTimer = 0, syncing = false;
+let syncTimer = 0, syncing = false, WB_TYPE = {};
 function startAutoSync() { clearInterval(syncTimer); runSync(); syncTimer = setInterval(runSync, SYNC_MIN * 60000); }
 async function runSync() {
   if (syncing || S.busy || S.autoBusy || !S.cloudFile) return;
@@ -486,6 +487,9 @@ async function runSync() {
         if (rows.length) { app = rows; remoteOk = true; }
       } catch {}
     }
+    WB_TYPE = {};
+    app.forEach(a => { const w = wbKey(a.waybill); if (w && a.type && !WB_TYPE[w]) WB_TYPE[w] = a.type; });
+    xl.forEach(r => { const w = wbKey(vals[r][4]), t = fromCell(vals[r][6]); if (w && t && !WB_TYPE[w]) WB_TYPE[w] = t; });
     const before = new Map(app.map(a => [a.id, JSON.stringify(a)]));
     const SNAP_KEY = 'claims-excel.snap.' + ym; let snap = {}; try { snap = JSON.parse(localStorage.getItem(SNAP_KEY) || '{}') || {}; } catch {}
     const sv = v => { const s = String(v ?? '').trim(); return /^-?[\d,]+(\.\d+)?$/.test(s) ? String(+s.replace(/,/g, '')) : s; };
@@ -528,7 +532,7 @@ async function runSync() {
       F_MAP.forEach(([c, f]) => {
         const xv = obj[f], av = derived(hit)[f];
         // 아워사고는 택배사고접수 항상 X
-        if (f === 'courierOk' && hit.type === '아워사고') {
+        if (f === 'courierOk' && (hit.type || WB_TYPE[wbKey(hit.waybill)]) === '아워사고') {
           if (hit.courierOk !== 'X') { hit.courierOk = 'X'; fillApp++; }
           if (!same(xv, 'X') && !isF(r, c)) { out[c] = 'X'; changed = true; fillXl++; }
           return;
