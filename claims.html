@@ -538,7 +538,9 @@ async function runSync() {
         // 지난 동기화 이후 어느 쪽이 바뀌었는지 보고 바뀐 쪽 값을 반영 (기록이 없으면 클레임 관리 기준)
         const xlChanged = b !== undefined ? (same(av, b) && !same(xv, b)) : (isBlank(av) || placeholder);
         if (isF(r, c)) {
-          if (INPUT.has(f)) { if (isBlank(av)) { hit[f] = xv; fillApp++; } else if (isBlank(xv)) { out[c] = av; changed = true; fillXl++; } }
+          // 클레임 관리에서 직접 고친 값(지난 동기화 이후 클레임 관리만 바뀜)은 엑셀 수식 칸에 값으로 적음 → 수식 결과로 되돌아가지 않게
+          if (b !== undefined && !isBlank(av) && !same(av, b) && same(xv, b)) { out[c] = av; changed = true; fillXl++; }
+          else if (INPUT.has(f)) { if (isBlank(av)) { hit[f] = xv; fillApp++; } else if (isBlank(xv)) { out[c] = av; changed = true; fillXl++; } }
           else if (!isBlank(xv)) { hit[f] = xv; fillApp++; }
         }
         else if (xlChanged) { hit[f] = isBlank(xv) ? '' : xv; fillApp++; }
