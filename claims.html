@@ -516,7 +516,8 @@ async function runSync() {
         app.push(n); fromXl.add(n); addApp++; continue;
       }
       matched.add(hit);
-      const out = fms[r].map((f, c) => isF(r, c) ? f : (row[c] ?? '')); let changed = false;
+      // 바꾸는 칸만 적고 나머지는 null(그대로 둠) → 접수일 같은 수식/날짜 칸이 다시 계산되며 바뀌지 않게
+      const out = fms[r].map(() => null); let changed = false;
       F_MAP.forEach(([c, f]) => {
         const xv = obj[f], av = derived(hit)[f];
         // 아워사고는 택배사고접수 항상 X
