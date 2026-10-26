@@ -2,12 +2,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>월 클레임 관리</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
-:root{--bg:#EEF1F7;--surface:#FFFFFF;--surface2:#F5F7FB;--border:#DDE2ED;--text:#0F1624;--muted:#6B7689;--accent:#1A4ED8;--accent-hover:#1340BC;--success:#047857;--success-bg:#ECFDF5;--danger:#C62828;--shadow:0 1px 3px rgba(0,0,0,.08);--shadow-md:0 4px 16px rgba(0,0,0,.12);--radius:8px;--row-hover:#F0F4FF}
+:root{--bg:#F5F7FA;--surface:#FFFFFF;--surface2:#F9FAFB;--border:#E5E7EB;--text:#0F172A;--muted:#6B7280;--accent:#2563EB;--accent-hover:#1D4ED8;--success:#047857;--success-bg:#ECFDF5;--danger:#C62828;--shadow:0 1px 3px rgba(0,0,0,.08);--shadow-md:0 4px 16px rgba(0,0,0,.12);--radius:8px;--row-hover:#F5F8FF}
 *,*::before,*::after{box-sizing:border-box;margin:0}
-html,body{font-family:'Noto Sans KR',system-ui,sans-serif}
+html,body{font-family:Pretendard,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif}
 body{background:var(--bg);color:var(--text);font-size:13px;line-height:1.5}
 a{color:var(--accent)}a:hover{color:var(--accent-hover)}
 .claims-workspace{padding:16px;display:flex;flex-direction:column;gap:12px;max-width:1400px;margin:0 auto}
@@ -64,14 +64,14 @@ td input{height:28px;width:100%;min-width:120px}
 .modal-title{font-size:15px;font-weight:700}
 .modal-body{font-size:12px;color:var(--muted)}
 .claims-choice{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer}
-.claims-choice:has(input:checked){border-color:var(--accent);background:#EEF3FF}
+.claims-choice:has(input:checked){border-color:var(--accent);background:#EFF4FF}
 .claims-choice input{height:auto;margin-top:3px}
 .claims-choice span{display:flex;flex-direction:column}
 .claims-choice small{color:var(--muted);font-size:11px}
 .claims-start{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;font-weight:500}
 .claims-start input{width:100px;text-align:right}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
-#flash{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#0F1624;color:#fff;padding:9px 16px;border-radius:8px;font-size:12px;box-shadow:var(--shadow-md);z-index:400;max-width:90vw;opacity:0;pointer-events:none;transition:opacity .2s}
+#flash{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#0F172A;color:#fff;padding:9px 16px;border-radius:8px;font-size:12px;box-shadow:var(--shadow-md);z-index:400;max-width:90vw;opacity:0;pointer-events:none;transition:opacity .2s}
 #flash.on{opacity:1}
 </style>
 <script>
@@ -508,6 +508,7 @@ async function runSync() {
       return i < 0 ? null : delRows.splice(i, 1)[0];
     };
     // 입력값 칸: 엑셀에 수식(통합내역 조회 등)이 있어도 결과가 비어 있으면 클레임 관리 값을 적음
+    const DERIVED = new Set(['missingCode','missing','misQty','accidentCode','accident','accQty']);
     const INPUT = new Set(['mall','recv','ship','waybill','name','type','reason','productCode','product','qty','reship','courierOk','stockAdjDate','note','price','claimDelivery','workType','boxCode']);
     const ACC = ['파손반송','파손수령','배송지연','송장흐름없음','분실','오배송','오출고'];
     for (const r of xl) {
@@ -550,6 +551,8 @@ async function runSync() {
         const placeholder = f === 'reship' && !isBlank(av) && !/\d{6,}/.test(String(av)) && /\d{6,}/.test(String(xv ?? ''));
         // 지난 동기화 이후 어느 쪽이 바뀌었는지 보고 바뀐 쪽 값을 반영 (기록이 없으면 클레임 관리 기준)
         const xlChanged = b !== undefined ? (same(av, b) && !same(xv, b)) : (isBlank(av) || placeholder);
+        // 누락/사고 품목·수량을 클레임 관리에 입력했으면 엑셀 수식 결과로 되돌리지 않고 입력값을 엑셀에 적음
+        if (DERIVED.has(f) && !isBlank(av) && isF(r, c)) { out[c] = av; changed = true; fillXl++; return; }
         if (isF(r, c)) {
           // 클레임 관리에서 직접 고친 값(지난 동기화 이후 클레임 관리만 바뀜)은 엑셀 수식 칸에 값으로 적음 → 수식 결과로 되돌아가지 않게
           if (b !== undefined && !isBlank(av) && !same(av, b) && same(xv, b)) { out[c] = av; changed = true; fillXl++; }
@@ -572,7 +575,7 @@ async function runSync() {
       const d = derived(a);
       for (let c = 0; c < endCol; c++) {
         const m = F_MAP.find(x => x[0] === c), v = m ? d[m[1]] : '';
-        if (m && INPUT.has(m[1]) && !isBlank(v)) out.push(v);
+        if (m && (INPUT.has(m[1]) || DERIVED.has(m[1])) && !isBlank(v)) out.push(v);
         else if (r < vals.length && isF(r, c)) out.push(fms[r][c]);
         else if (isF(last, c)) out.push(Engine.shiftFormula(fms[last][c], 0, r - last));
         else out.push(isBlank(v) ? '' : v);
@@ -943,7 +946,7 @@ document.addEventListener('focusout', e => {
 // ---------- boot ----------
 const q = new URLSearchParams(location.search);
 if (q.has('error')) {
-  document.body.innerHTML = `<div style="padding:20px;font:13px/1.6 'Noto Sans KR',sans-serif;color:#0F1624"><b style="color:#C62828">Microsoft 로그인 오류</b><p style="margin-top:8px">${esc(q.get('error'))}</p><p style="margin-top:8px;word-break:break-all">${esc(q.get('error_description') || '')}</p></div>`;
+  document.body.innerHTML = `<div style="padding:20px;font:13px/1.6 'Noto Sans KR',sans-serif;color:#0F172A"><b style="color:#C62828">Microsoft 로그인 오류</b><p style="margin-top:8px">${esc(q.get('error'))}</p><p style="margin-top:8px;word-break:break-all">${esc(q.get('error_description') || '')}</p></div>`;
   return;
 }
 if (q.has('code') && window.opener && window.opener !== window) {
