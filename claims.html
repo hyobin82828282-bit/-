@@ -461,6 +461,8 @@ async function runSync() {
   if (!hasMicrosoftToken()) { clearInterval(syncTimer); set({ syncMsg: '로그인 만료 · OneDrive 다시 연결하면 동기화 재개' }); return; }
   const ym = claimMonthKey();
   if (!ym) { set({ syncMsg: '시트 이름에서 월을 찾지 못해 동기화하지 않았습니다' }); return; }
+  // 10월 이전 클레임 시트는 동기화로 수정하지 않음 (보호)
+  if (String(ym) <= '202610') { set({ syncMsg: (+String(ym).slice(4)) + '월 시트는 보호 중이라 동기화하지 않습니다' }); return; }
   syncing = true; render();
   try {
     const ref = S.cloudFile, sheet = S.sheetName, ws = `/drives/${ref.driveId}/items/${ref.itemId}/workbook/worksheets('${encodeURIComponent(sheet.replace(/'/g, "''"))}')`;
@@ -566,7 +568,7 @@ async function runSync() {
       snap[hit.id] = snapOf(derived(hit));
       if (changed) rowWrites.push({ r, out });
     }
-    // 클레임 관리에만 있는 행 → 접수일·출고일 순서에 맞는 자리에 행을 끼워 넣음 (맨 아래에 붙이지 않음)
+    // 클레임 관리에만 있는 행 → 접수일·입력일·출고일 순서에 맞는 자리에 행을 끼워 넣음 (맨 아래에 붙이지 않음)
     const appOnly = app.filter(a => !matched.has(a) && !fromXl.has(a) && !isBlank(a.waybill));
     const cm = parseInt(String(ym).slice(4), 10) || 1;
     const md = v => {
@@ -575,10 +577,11 @@ async function runSync() {
       else { const p = String(v ?? '').match(/(\d{1,2})\D+(\d{1,2})/); if (!p) return 99999; m = +p[1]; d = +p[2]; }
       return (m + (m > cm + 6 ? -12 : (m < cm - 6 ? 12 : 0)) + 12) * 100 + d;
     };
-    const ordOf = (rv, sv) => md(rv) * 100000 + (md(sv) % 100000);
-    const xlOrd = xl.map(r => [r, ordOf(vals[r][2], vals[r][3])]);
+    // 접수일 → 입력일(입력 순서) → 출고일: 같은 접수일이면 이미 엑셀에 있는 행 뒤, 입력한 순서대로
+    const ordOf = rv => md(rv);
+    const xlOrd = xl.map(r => [r, ordOf(vals[r][2])]);
     const groups = new Map();
-    appOnly.map(a => ({ a, o: ordOf(a.recv, a.ship) })).sort((x, y) => x.o - y.o || (+x.a.id || 0) - (+y.a.id || 0)).forEach(({ a, o }) => {
+    appOnly.map(a => ({ a, o: ordOf(a.recv) })).sort((x, y) => x.o - y.o || (+x.a.id || 0) - (+y.a.id || 0) || md(x.a.ship) - md(y.a.ship)).forEach(({ a, o }) => {
       let t = xl.length ? xl[0] : 1;
       for (const [r, ro] of xlOrd) if (ro <= o) t = r + 1;
       if (!groups.has(t)) groups.set(t, []);
