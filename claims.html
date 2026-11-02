@@ -220,8 +220,8 @@ const claimValue = (wb, sh, a) => { const c = sh.cells[a]; return c?.f && c.v !=
 const claimSheet = wb => {
   const cur = (location.hash.match(/month=(\d{6})/) || [])[1] || localStorage.getItem('claims_cur_month') || '', m = /^\d{6}$/.test(cur) ? parseInt(cur.slice(4)) : new Date().getMonth() + 1;
   const clean = s => s.replace(/\s/g, '');
-  return wb.sheets.find(s => clean(s.name) === m + '월클레임') || wb.sheets.find(s => new RegExp('(^|\\D)' + m + '\\s*월').test(s.name) && s.name.includes('클레임') && !s.name.includes('통합'))
-    || wb.sheets.find(s => /\d+월 클레임/.test(s.name)) || wb.sheets.find(s => s.name.includes('클레임')) || wb.sheets[0];
+  // 그 달 시트가 없으면 다른 달 시트로 대신 연결하지 않음 (다른 달 시트에 섞여 들어가는 것 방지)
+  return wb.sheets.find(s => clean(s.name) === m + '월클레임') || wb.sheets.find(s => new RegExp('(^|\\D)' + m + '\\s*월').test(s.name) && s.name.includes('클레임') && !s.name.includes('통합')) || null;
 };
 function headerCol(wb, sh, words, fallback) {
   for (let c = 1; c <= Math.max(sh.maxC, 30); c++) {
@@ -352,7 +352,7 @@ async function openCloudFile() {
   const ref = await openSharedWorkbook(S.shareUrl);
   const book = Engine.load(await downloadWorkbook(ref));
   const target = claimSheet(book);
-  if (!target) throw new Error('OneDrive 파일에서 클레임 시트를 찾지 못했습니다.');
+  if (!target) throw new Error('OneDrive 파일에 ' + ((location.hash.match(/month=\d{4}(\d{2})/) || [])[1] || '') .replace(/^0/, '') + '월 클레임 시트가 없습니다. 엑셀에 시트를 먼저 만들어 주세요.');
   localStorage.setItem('claims.graph.clientId', S.clientId); localStorage.setItem('claims.graph.shareUrl', S.shareUrl);
   set({ wb: book, name: ref.fileName, sheetName: target.name, queue: [], cloudFile: ref, settingsOpen: true });
   flash(ref.fileName + ' OneDrive에서 열었습니다.');
@@ -584,6 +584,22 @@ async function runSync() {
       if (!groups.has(t)) groups.set(t, []);
       groups.get(t).push(a);
     });
+    // 마지막 행 뒤에 들어갈 건은 끼워 넣지 않고 아래 빈 줄(미리 넣어둔 수식 줄 포함)에 적음
+    const tailT = last + 1, tail = groups.get(tailT) || [];
+    groups.delete(tailT);
+    { let r = last + 1;
+      for (const a of tail) {
+        while (r < vals.length && (vals[r] || []).some((v, c) => !isF(r, c) && !isBlank(v))) r++;
+        const d = derived(a), out = [], tp = last >= 1 ? last : r;
+        for (let c = 0; c < endCol; c++) {
+          const m = F_MAP.find(x => x[0] === c), v = m ? d[m[1]] : '';
+          if (m && (INPUT.has(m[1]) || DERIVED.has(m[1])) && !isBlank(v)) out.push(v);
+          else if (r < vals.length && isF(r, c)) out.push(fms[r][c]);
+          else if (tp !== r && isF(tp, c)) out.push(Engine.shiftFormula(fms[tp][c], 0, r - tp));
+          else out.push(isBlank(v) ? '' : v);
+        }
+        rowWrites.push({ r, out }); addXl++; r++;
+      } }
     const ins = [...groups.entries()].sort((x, y) => y[0] - x[0]);
     const adj = r => r + ins.reduce((s, [t, list]) => s + (t <= r ? list.length : 0), 0);
     // 일시적인 오류(요청 많음 등)로 중간에 멈추지 않도록 재시도
