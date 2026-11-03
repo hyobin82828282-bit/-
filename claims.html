@@ -455,14 +455,20 @@ function derived(a) {
   return d;
 }
 let syncTimer = 0, syncing = false, WB_TYPE = {};
-function startAutoSync() { clearInterval(syncTimer); runSync(); syncTimer = setInterval(runSync, SYNC_MIN * 60000); }
-async function runSync() {
+const protectOk = new Set(); // '예'를 누른 보호 시트(월) — 이 창을 닫기 전까지만 유지
+function startAutoSync(manual) { clearInterval(syncTimer); runSync(manual === true); syncTimer = setInterval(runSync, SYNC_MIN * 60000); }
+async function runSync(manual) {
   if (syncing || S.busy || S.autoBusy || !S.cloudFile) return;
   if (!hasMicrosoftToken()) { clearInterval(syncTimer); set({ syncMsg: '로그인 만료 · OneDrive 다시 연결하면 동기화 재개' }); return; }
   const ym = claimMonthKey();
   if (!ym) { set({ syncMsg: '시트 이름에서 월을 찾지 못해 동기화하지 않았습니다' }); return; }
   // 10월 이전 클레임 시트는 동기화로 수정하지 않음 (보호)
-  if (String(ym) <= '202610') { set({ syncMsg: (+String(ym).slice(4)) + '월 시트는 보호 중이라 동기화하지 않습니다' }); return; }
+  if (String(ym) <= '202610' && !protectOk.has(ym)) {
+    const mn = (+String(ym).slice(4)) + '월';
+    if (manual !== true) { set({ syncMsg: mn + ' 시트는 보호 중이라 자동 동기화하지 않습니다 · 동기화하려면 [지금 동기화]를 눌러 주세요' }); return; }
+    if (!confirm(mn + ' 클레임 시트는 보호 중입니다.\n지금 엑셀 ' + mn + ' 시트와 동기화할까요?\n\n[확인] 예, 동기화합니다\n[취소] 아니요')) { set({ syncMsg: mn + ' 시트 동기화를 취소했습니다' }); return; }
+    protectOk.add(ym);
+  }
   syncing = true; render();
   try {
     const ref = S.cloudFile, sheet = S.sheetName, ws = `/drives/${ref.driveId}/items/${ref.itemId}/workbook/worksheets('${encodeURIComponent(sheet.replace(/'/g, "''"))}')`;
@@ -870,7 +876,7 @@ document.addEventListener('click', e => {
   ({
     open: () => $('#fileIn').click(), import: () => $('#importIn').click(), export: exportFile, cloud: connectCloud,
     settings: () => set({ settingsOpen: true }), closeSettings: () => set({ settingsOpen: false }), build: buildQueue,
-    auto: autoLookup, saveAll: saveAllFares, memo: openMemo, syncNow: () => { if (syncing) return; if (S.busy || S.autoBusy) { alert('조회가 끝난 뒤 다시 눌러 주세요'); return; } if (!hasMicrosoftToken()) { alert('OneDrive 로그인이 만료됐어요. 다시 연결해 주세요.'); return; } startAutoSync(); },
+    auto: autoLookup, saveAll: saveAllFares, memo: openMemo, syncNow: () => { if (syncing) return; if (S.busy || S.autoBusy) { alert('조회가 끝난 뒤 다시 눌러 주세요'); return; } if (!hasMicrosoftToken()) { alert('OneDrive 로그인이 만료됐어요. 다시 연결해 주세요.'); return; } startAutoSync(true); },
     moreRows: () => { xlLimit += XL_PAGE; render(); }, toggleQueue: () => set({ queueOpen: !S.queueOpen }),
     memoCancel: () => { $('#memo-overlay').style.display = 'none'; }, memoRun: runMemo,
     memoFile: () => { const f = $('#memo-file'); f.value = ''; f.click(); }, skip: () => set({ queue: S.queue.filter(x => x.row !== row) }),
